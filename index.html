@@ -314,6 +314,10 @@
       margin-top: 4px;
     }
 
+    /* Etiquetas de estilo */
+    .style-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    .style-chip { background: var(--card); color: var(--text-muted); border: 1px solid var(--border); border-radius: 999px; padding: 6px 10px; font-size: 11px; font-weight: 700; cursor: pointer; }
+    .style-chip.on { background: rgba(234, 88, 12, 0.2); color: var(--primary); border-color: var(--primary); }
     /* Zonas */
     .zone-item { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; cursor: pointer; }
     .zone-count { background: rgba(234, 88, 12, 0.2); color: var(--primary); font-weight: 800; font-size: 11px; padding: 2px 8px; border-radius: 999px; }
@@ -348,7 +352,8 @@
         <select id="zone-filter" onchange="renderBoulders()"><option value="">Todas las zonas</option></select>
         <select id="status-filter" onchange="renderBoulders()"></select>
         <select id="grade-filter" onchange="renderBoulders()"><option value="">Todos los grados</option></select>
-        <select id="sort-select" onchange="renderBoulders()">
+        <select id="style-filter" onchange="renderBoulders()"></select>
+        <select id="sort-select" style="grid-column: 1 / -1;" onchange="renderBoulders()">
           <option value="recent">Más recientes</option>
           <option value="grade-desc">Grado: mayor a menor</option>
           <option value="grade-asc">Grado: menor a mayor</option>
@@ -463,6 +468,11 @@
         </div>
       </div>
 
+      <div class="input-group">
+        <label>Estilo</label>
+        <div id="boulder-styles" class="style-chips"></div>
+      </div>
+
       <!-- Valoración de Estrellas -->
       <div class="input-group">
         <label>Valoración (Calidad / Belleza)</label>
@@ -503,6 +513,7 @@
         <select id="backup-zone"></select>
         <button class="btn btn-secondary" style="width: auto; white-space: nowrap;" onclick="exportZone()">📤 Solo zona</button>
       </div>
+      <p id="backup-last" style="font-size: 11px; color: var(--text-muted); margin-bottom: 4px;"></p>
       <p id="storage-info" style="font-size: 11px; color: var(--text-muted); margin-bottom: 8px;"></p>
       
       <div style="border-top: 1px solid var(--border); padding-top: 8px; margin-top: 8px;">
@@ -528,6 +539,7 @@
         <div class="input-group" style="flex:1;"><label>Estado</label><select id="edit-status"></select></div>
         <div class="input-group" style="flex:1;"><label>Fecha</label><input type="date" id="edit-date" class="input-field"></div>
       </div>
+      <div class="input-group"><label>Estilo</label><div id="edit-styles" class="style-chips"></div></div>
       <div class="input-group"><label>Valoración</label>
         <select id="edit-rating"><option value="1">★</option><option value="2">★★</option><option value="3">★★★</option><option value="4">★★★★</option><option value="5">★★★★★</option></select>
       </div>
@@ -606,7 +618,7 @@
       const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify([b], null, 2));
       const a = document.createElement('a');
       a.href = dataStr;
-      a.download = `ruta_${b.name.toLowerCase().replace(/\s+/g, '_')}.json`;
+      a.download = `ruta_${b.name.toLowerCase().replace(/\s+/g, '_')}.txt`;
       a.click();
     }
 
@@ -654,6 +666,33 @@
           try { localStorage.setItem('bouldertopo_data', JSON.stringify(boulders)); }
           catch (e) { alert('No se pudo guardar: el almacenamiento está lleno. Descarga un backup.'); }
         });
+    }
+
+    // ===== ESTILOS Y PROGRESO DE ZONA =====
+    const STYLES = ['Placa', 'Desplome', 'Regletas', 'Romos', 'Compresión', 'Técnico', 'Potencia', 'Dinámico'];
+
+    function renderStyleChips(id, selected) {
+      const box = document.getElementById(id);
+      box.innerHTML = '';
+      STYLES.forEach(st => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'style-chip' + ((selected || []).includes(st) ? ' on' : '');
+        b.textContent = st;
+        b.onclick = () => b.classList.toggle('on');
+        box.appendChild(b);
+      });
+    }
+
+    function getStyleChips(id) {
+      return [...document.querySelectorAll(`#${id} .style-chip.on`)].map(b => b.textContent);
+    }
+
+    function progressHTML(z) {
+      const inZone = boulders.filter(b => z.key === NO_ZONE ? !zoneKeyOf(b.zone) : zoneKeyOf(b.zone) === z.key);
+      const sent = inZone.filter(b => b.status === 'encadenado' || b.status === 'flash').length;
+      const pct = inZone.length ? Math.round((sent / inZone.length) * 100) : 0;
+      return `<div style="font-size: 11px; color: var(--text-muted); margin-top: 3px;">${sent} de ${inZone.length} encadenados</div><div style="background: var(--border); border-radius: 4px; height: 5px; margin-top: 4px;"><div style="background: var(--primary); width: ${pct}%; height: 5px; border-radius: 4px;"></div></div>`;
     }
 
     // ===== ALMACENAMIENTO (IndexedDB) =====
@@ -905,6 +944,8 @@
       const opts = Object.keys(STATUS).map(k => `<option value="${k}">${STATUS[k]}</option>`).join('');
       document.getElementById('boulder-status').innerHTML = '<option value="">Sin estado</option>' + opts;
       document.getElementById('edit-status').innerHTML = '<option value="">Sin estado</option>' + opts;
+      document.getElementById('style-filter').innerHTML = '<option value="">Todos los estilos</option>' + STYLES.map(x => `<option value="${x}">${x}</option>`).join('');
+      renderStyleChips('boulder-styles', []);
       document.getElementById('status-filter').innerHTML = '<option value="">Todos los estados</option>' + opts;
       if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
       if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) navigator.serviceWorker.register('sw.js').catch(() => {});
@@ -942,6 +983,12 @@
       sel.innerHTML = zones.length
         ? zones.map(z => `<option value="${escapeHTML(z.key)}">${escapeHTML(z.name)} (${z.count})</option>`).join('')
         : '<option value="">Sin zonas</option>';
+      const last = Number(localStorage.getItem('bouldertopo_last_backup') || 0);
+      const bl = document.getElementById('backup-last');
+      if (bl) {
+        const d = Math.floor((Date.now() - last) / 86400000);
+        bl.textContent = last ? `Último backup: ${new Date(last).toLocaleDateString('es-ES')} · ${d === 0 ? 'hoy' : 'hace ' + d + (d === 1 ? ' día' : ' días')}` : 'Aún no has hecho ningún backup.';
+      }
       if (navigator.storage && navigator.storage.estimate) navigator.storage.estimate().then(e => {
         const el = document.getElementById('storage-info');
         if (el) el.textContent = `Espacio usado: ${(e.usage / 1048576).toFixed(1)} MB` + (e.quota ? ` de ${Math.round(e.quota / 1048576)} MB disponibles` : '');
@@ -955,7 +1002,7 @@
       const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(list, null, 2));
       const a = document.createElement('a');
       a.href = dataStr;
-      a.download = `zona_${key.replace(/\s+/g, '_')}.json`;
+      a.download = `zona_${key.replace(/\s+/g, '_')}.txt`;
       a.click();
     }
 
@@ -972,6 +1019,7 @@
       document.getElementById('edit-rating').value = String(b.rating || 3);
       document.getElementById('edit-gps').value = b.gps || '';
       document.getElementById('edit-notes').value = b.notes || '';
+      renderStyleChips('edit-styles', b.styles);
       document.getElementById('edit-modal').classList.remove('hidden');
     }
 
@@ -995,6 +1043,7 @@
       b.rating = Number(document.getElementById('edit-rating').value);
       b.gps = document.getElementById('edit-gps').value.trim();
       b.notes = document.getElementById('edit-notes').value;
+      b.styles = getStyleChips('edit-styles');
       saveToStorage();
       const id = editingId;
       closeEdit();
@@ -1059,7 +1108,7 @@
       items.forEach(z => {
         const el = document.createElement('div');
         el.className = 'zone-item';
-        el.innerHTML = `<div style="flex: 1; min-width: 0;"><strong style="font-size: 13px;">🗺️ ${escapeHTML(z.name)}</strong>${zoneNotes[z.key] ? `<div style="font-size: 11px; color: var(--text-muted); margin-top: 2px; white-space: pre-wrap;">${escapeHTML(zoneNotes[z.key])}</div>` : ''}</div><span class="zone-count">${z.count} ${z.count === 1 ? 'bloque' : 'bloques'}</span>`;
+        el.innerHTML = `<div style="flex: 1; min-width: 0;"><strong style="font-size: 13px;">🗺️ ${escapeHTML(z.name)}</strong>${progressHTML(z)}${zoneNotes[z.key] ? `<div style="font-size: 11px; color: var(--text-muted); margin-top: 2px; white-space: pre-wrap;">${escapeHTML(zoneNotes[z.key])}</div>` : ''}</div><span class="zone-count">${z.count} ${z.count === 1 ? 'bloque' : 'bloques'}</span>`;
         el.onclick = () => filterByZone(z.key);
         if (z.key !== NO_ZONE) {
           const eb = document.createElement('button');
@@ -1140,6 +1189,7 @@
       const statusSel = document.getElementById('status-filter').value;
       const gradeSel = document.getElementById('grade-filter').value;
       const sortSel = document.getElementById('sort-select').value;
+      const styleSel = document.getElementById('style-filter').value;
       document.getElementById('zone-note-banner').innerHTML = (zoneSel && zoneSel !== NO_ZONE && zoneNotes[zoneSel])
         ? `<div style="background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 10px; margin-bottom: 12px; font-size: 12px; white-space: pre-wrap;">🗺️ ${escapeHTML(zoneNotes[zoneSel])}</div>` : '';
       container.innerHTML = '';
@@ -1150,7 +1200,8 @@
         const matchesZone = !zoneSel || (zoneSel === NO_ZONE ? !zoneKey : zoneKey === zoneSel);
         const matchesStatus = !statusSel || (b.status || '') === statusSel;
         const matchesGrade = !gradeSel || b.grade === gradeSel;
-        return matchesText && matchesZone && matchesStatus && matchesGrade;
+        const matchesStyle = !styleSel || (b.styles || []).includes(styleSel);
+        return matchesText && matchesZone && matchesStatus && matchesGrade && matchesStyle;
       });
 
       if (sortSel === 'grade-desc') filtered.sort((a, b) => gradeValue(b.grade) - gradeValue(a.grade));
@@ -1176,7 +1227,7 @@
                 <strong style="font-size: 13px;">${escapeHTML(b.name)}</strong>
                 <span class="grade-badge">${escapeHTML(b.grade)}</span>
               </div>
-              <p style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">${b.zone ? '🗺️ ' + escapeHTML(b.zone) + ' · ' : ''}${escapeHTML(b.sector)}</p>
+              <p style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">${b.zone ? '🗺️ ' + escapeHTML(b.zone) + ' · ' : ''}${escapeHTML(b.sector)}${(b.styles || []).length ? ' · ' + b.styles.map(escapeHTML).join(', ') : ''}</p>
             </div>
             <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-top: 4px;">
               <span class="stars-display">${ratingStars}</span>
@@ -1209,6 +1260,7 @@
               <span class="stars-display" style="font-size: 14px;">${ratingStars}</span>
             </div>
             
+            ${(b.styles || []).length ? `<p style="font-size: 12px; margin-bottom: 8px;">${b.styles.map(x => '🏷️ ' + escapeHTML(x)).join(' · ')}</p>` : ''}
             ${b.status ? `<p style="font-size: 12px; margin-bottom: 12px;">${statusLabel(b)}${b.date ? ' · ' + fmtDate(b.date) : ''}</p>` : ''}
             ${b.notes ? `<p style="font-size: 12px; background: rgba(0,0,0,0.3); padding: 10px; border-radius: 8px; margin-bottom: 12px; white-space: pre-wrap;">${escapeHTML(b.notes)}</p>` : ''}
             ${b.gps ? `<p style="font-size: 11px; color: var(--text-muted); margin-bottom: 12px;">📍 ${escapeHTML(b.gps)}</p>` : ''}
@@ -1581,6 +1633,7 @@
         grade: document.getElementById('boulder-grade').value || '6a',
         sector: document.getElementById('boulder-sector').value || 'Sector General',
         zone: canonicalZone(document.getElementById('boulder-zone').value),
+        styles: getStyleChips('boulder-styles'),
         status: document.getElementById('boulder-status').value,
         date: document.getElementById('boulder-date').value || (['encadenado', 'flash'].includes(document.getElementById('boulder-status').value) ? todayISO() : ''),
         rating: currentRating,
@@ -1598,6 +1651,7 @@
       document.getElementById('boulder-zone').value = '';
       document.getElementById('boulder-status').value = '';
       document.getElementById('boulder-date').value = '';
+      renderStyleChips('boulder-styles', []);
       document.getElementById('boulder-gps').value = '';
       document.getElementById('boulder-notes').value = '';
       document.getElementById('editor-panel').classList.add('hidden');
@@ -1622,7 +1676,7 @@
       const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(boulders.concat(Object.keys(zoneNotes).length ? [{ __zoneNotes: zoneNotes }] : []), null, 2));
       const a = document.createElement('a');
       a.href = dataStr;
-      a.download = `rutas_guardadas_boulder_app.json`;
+      a.download = `rutas_guardadas_boulder_app.txt`;
       localStorage.setItem('bouldertopo_last_backup', String(Date.now()));
       checkBackupReminder();
       a.click();
