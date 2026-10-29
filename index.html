@@ -356,6 +356,7 @@
           <option value="name">Nombre A-Z</option>
         </select>
       </div>
+      <div id="zone-note-banner"></div>
       <div id="bouldering-list"></div>
     </section>
 
@@ -502,6 +503,7 @@
         <select id="backup-zone"></select>
         <button class="btn btn-secondary" style="width: auto; white-space: nowrap;" onclick="exportZone()">📤 Solo zona</button>
       </div>
+      <p id="storage-info" style="font-size: 11px; color: var(--text-muted); margin-bottom: 8px;"></p>
       
       <div style="border-top: 1px solid var(--border); padding-top: 8px; margin-top: 8px;">
         <label style="font-size: 11px; color: var(--text-muted);">Importar archivo JSON/TXT:</label>
@@ -534,6 +536,20 @@
       <div class="btn-group">
         <button class="btn btn-secondary" onclick="closeEdit()">Cancelar</button>
         <button class="btn" onclick="saveEdit()">Guardar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL EDITAR ZONA -->
+  <div id="zone-modal" class="modal hidden">
+    <div class="modal-content">
+      <h3 style="font-size: 14px; margin-bottom: 12px;">Editar zona</h3>
+      <div class="input-group"><label>Nombre</label><input type="text" id="zone-edit-name" class="input-field"></div>
+      <p style="font-size: 11px; color: var(--text-muted); margin-bottom: 10px;">Si escribes el nombre de otra zona que ya existe, se fusionan.</p>
+      <div class="input-group"><label>Nota de la zona</label><textarea id="zone-edit-note" rows="3" placeholder="Cómo llegar, dónde aparcar..."></textarea></div>
+      <div class="btn-group">
+        <button class="btn btn-secondary" onclick="closeZoneEdit()">Cancelar</button>
+        <button class="btn" onclick="saveZoneEdit()">Guardar</button>
       </div>
     </div>
   </div>
@@ -615,13 +631,8 @@
     const ctx = canvas.getContext('2d');
     const wrapper = document.getElementById('canvas-wrapper');
 
-    window.addEventListener('DOMContentLoaded', () => {
-      const saved = localStorage.getItem('bouldertopo_data');
-      if (saved) {
-        try {
-          boulders = JSON.parse(saved);
-        } catch(e) { console.error(e); }
-      }
+    window.addEventListener('DOMContentLoaded', async () => {
+      await loadBoulders();
       initStatusSelects();
       renderBoulders();
       setupCanvasEvents();
@@ -634,8 +645,130 @@
       });
     });
 
+    // Guarda en IndexedDB (sin el límite de ~5 MB de localStorage); si falla, usa localStorage
     function saveToStorage() {
-      localStorage.setItem('bouldertopo_data', JSON.stringify(boulders));
+      saveChain = saveChain
+        .then(() => idbSet('boulders', boulders))
+        .catch(err => {
+          console.error(err);
+          try { localStorage.setItem('bouldertopo_data', JSON.stringify(boulders)); }
+          catch (e) { alert('No se pudo guardar: el almacenamiento está lleno. Descarga un backup.'); }
+        });
+    }
+
+    // ===== ALMACENAMIENTO (IndexedDB) =====
+    const DB_NAME = 'bouldertopo_db', STORE = 'kv';
+    let dbPromise = null;
+    let saveChain = Promise.resolve();
+    let zoneNotes = {};
+    let editingZoneKey = null;
+
+    function openDB() {
+      if (!dbPromise) dbPromise = new Promise((res, rej) => {
+        const r = indexedDB.open(DB_NAME, 1);
+        r.onupgradeneeded = () => r.result.createObjectStore(STORE);
+        r.onsuccess = () => res(r.result);
+        r.onerror = () => rej(r.error);
+      });
+      return dbPromise;
+    }
+
+    function idbGet(key) {
+      return openDB().then(db => new Promise((res, rej) => {
+        const q = db.transaction(STORE).objectStore(STORE).get(key);
+        q.onsuccess = () => res(q.result);
+        q.onerror = () => rej(q.error);
+      }));
+    }
+
+    function idbSet(key, val) {
+      return openDB().then(db => new Promise((res, rej) => {
+        const tx = db.transaction(STORE, 'readwrite');
+        tx.objectStore(STORE).put(val, key);
+        tx.oncomplete = () => res();
+        tx.onerror = () => rej(tx.error);
+        tx.onabort = () => rej(tx.error);
+      }));
+    }
+
+    // Carga desde IndexedDB; si está vacío, migra lo que hubiera en localStorage
+    async function loadBoulders() {
+      try {
+        const stored = await idbGet('boulders');
+        if (Array.isArray(stored)) boulders = stored;
+        const zn = await idbGet('zoneNotes');
+        if (zn && typeof zn === 'object') zoneNotes = zn;
+        if (Array.isArray(stored)) return;
+      } catch (e) { console.error(e); }
+      try { boulders = JSON.parse(localStorage.getItem('bouldertopo_data') || '[]'); } catch (e) { console.error(e); }
+      try { zoneNotes = JSON.parse(localStorage.getItem('bouldertopo_zone_notes') || '{}'); } catch (e) {}
+      if (boulders.length) saveToStorage();
+    }
+
+    function saveZoneNotes() {
+      idbSet('zoneNotes', zoneNotes).catch(() => {
+        try { localStorage.setItem('bouldertopo_zone_notes', JSON.stringify(zoneNotes)); } catch (e) {}
+      });
+    }
+
+    // ===== EDITAR / FUSIONAR ZONAS =====
+    function openZoneEdit(key) {
+      const z = getZones().find(x => x.key === key);
+      if (!z) return;
+      editingZoneKey = key;
+      document.getElementById('zone-edit-name').value = z.name;
+      document.getElementById('zone-edit-note').value = zoneNotes[key] || '';
+      document.getElementById('zone-modal').classList.remove('hidden');
+    }
+
+    function closeZoneEdit() {
+      document.getElementById('zone-modal').classList.add('hidden');
+      editingZoneKey = null;
+    }
+
+    function saveZoneEdit() {
+      const oldKey = editingZoneKey;
+      const typed = document.getElementById('zone-edit-name').value.trim();
+      if (!typed) return alert('Introduce un nombre para la zona');
+      const newKey = typed.toLowerCase();
+      const merging = newKey !== oldKey && getZones().some(z => z.key === newKey);
+      if (merging && !confirm(`Ya existe la zona "${canonicalZone(typed)}". ¿Fusionar sus bloques con ella?`)) return;
+      const newName = newKey === oldKey ? typed : canonicalZone(typed);
+      boulders.forEach(b => { if (zoneKeyOf(b.zone) === oldKey) b.zone = newName; });
+      const note = document.getElementById('zone-edit-note').value.trim();
+      const existing = newKey !== oldKey ? (zoneNotes[newKey] || '') : '';
+      if (newKey !== oldKey) delete zoneNotes[oldKey];
+      const merged = [existing, note].filter((t, i, a) => t && a.indexOf(t) === i).join('\n');
+      if (merged) zoneNotes[newKey] = merged; else delete zoneNotes[newKey];
+      saveToStorage();
+      saveZoneNotes();
+      closeZoneEdit();
+      renderZones();
+    }
+
+    // ===== COMPARTIR BLOQUE =====
+    async function shareBoulder(id) {
+      const b = boulders.find(item => item.id === id);
+      if (!b) return;
+      const lines = [`${b.name} · ${b.grade}`];
+      if (b.zone) lines.push(`Zona: ${b.zone}`);
+      if (b.sector) lines.push(`Sector: ${b.sector}`);
+      if (b.status) lines.push(statusLabel(b) + (b.date ? ' · ' + fmtDate(b.date) : ''));
+      if (b.rating) lines.push('★'.repeat(b.rating));
+      if (b.notes) lines.push('', b.notes);
+      if (b.gps) lines.push('', `📍 https://www.google.com/maps?q=${encodeURIComponent(b.gps)}`);
+      const text = lines.join('\n');
+      const data = { title: b.name, text };
+      try {
+        if (b.image && navigator.canShare) {
+          const blob = await (await fetch(b.image)).blob();
+          const file = new File([blob], `${(b.name || 'bloque').replace(/[^\w-]+/g, '_')}.jpg`, { type: blob.type || 'image/jpeg' });
+          if (navigator.canShare({ files: [file] })) data.files = [file];
+        }
+        if (navigator.share) { await navigator.share(data); return; }
+      } catch (e) { if (e && e.name === 'AbortError') return; }
+      try { await navigator.clipboard.writeText(text); alert('Datos del bloque copiados al portapapeles.'); }
+      catch (e) { alert(text); }
     }
 
     // ===== VISOR DE FOTO =====
@@ -809,6 +942,10 @@
       sel.innerHTML = zones.length
         ? zones.map(z => `<option value="${escapeHTML(z.key)}">${escapeHTML(z.name)} (${z.count})</option>`).join('')
         : '<option value="">Sin zonas</option>';
+      if (navigator.storage && navigator.storage.estimate) navigator.storage.estimate().then(e => {
+        const el = document.getElementById('storage-info');
+        if (el) el.textContent = `Espacio usado: ${(e.usage / 1048576).toFixed(1)} MB` + (e.quota ? ` de ${Math.round(e.quota / 1048576)} MB disponibles` : '');
+      }).catch(() => {});
     }
 
     function exportZone() {
@@ -922,8 +1059,16 @@
       items.forEach(z => {
         const el = document.createElement('div');
         el.className = 'zone-item';
-        el.innerHTML = `<strong style="font-size: 13px;">🗺️ ${escapeHTML(z.name)}</strong><span class="zone-count">${z.count} ${z.count === 1 ? 'bloque' : 'bloques'}</span>`;
+        el.innerHTML = `<div style="flex: 1; min-width: 0;"><strong style="font-size: 13px;">🗺️ ${escapeHTML(z.name)}</strong>${zoneNotes[z.key] ? `<div style="font-size: 11px; color: var(--text-muted); margin-top: 2px; white-space: pre-wrap;">${escapeHTML(zoneNotes[z.key])}</div>` : ''}</div><span class="zone-count">${z.count} ${z.count === 1 ? 'bloque' : 'bloques'}</span>`;
         el.onclick = () => filterByZone(z.key);
+        if (z.key !== NO_ZONE) {
+          const eb = document.createElement('button');
+          eb.className = 'btn btn-secondary';
+          eb.style.cssText = 'width: auto; margin-left: 8px; padding: 4px 8px;';
+          eb.textContent = '✏️';
+          eb.onclick = ev => { ev.stopPropagation(); openZoneEdit(z.key); };
+          el.appendChild(eb);
+        }
         container.appendChild(el);
       });
     }
@@ -995,6 +1140,8 @@
       const statusSel = document.getElementById('status-filter').value;
       const gradeSel = document.getElementById('grade-filter').value;
       const sortSel = document.getElementById('sort-select').value;
+      document.getElementById('zone-note-banner').innerHTML = (zoneSel && zoneSel !== NO_ZONE && zoneNotes[zoneSel])
+        ? `<div style="background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 10px; margin-bottom: 12px; font-size: 12px; white-space: pre-wrap;">🗺️ ${escapeHTML(zoneNotes[zoneSel])}</div>` : '';
       container.innerHTML = '';
 
       const filtered = boulders.filter(b => {
@@ -1068,6 +1215,7 @@
 
             <div style="display: flex; gap: 8px; margin-top: 4px;">
               <button class="btn btn-secondary" style="flex: 1;" onclick="openEdit('${b.id}')">✏️ Editar bloque</button>
+              <button class="btn btn-secondary" style="flex: 1;" onclick="shareBoulder('${b.id}')">📤 Compartir</button>
               ${b.gps ? `<a class="btn btn-secondary" style="flex: 1; text-decoration: none;" target="_blank" rel="noopener" href="https://www.google.com/maps?q=${encodeURIComponent(b.gps)}">🧭 Cómo llegar</a>` : ''}
             </div>
 
@@ -1471,7 +1619,7 @@
     function closeBackupModal() { document.getElementById('backup-modal').classList.add('hidden'); }
 
     function exportJSON() {
-      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(boulders, null, 2));
+      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(boulders.concat(Object.keys(zoneNotes).length ? [{ __zoneNotes: zoneNotes }] : []), null, 2));
       const a = document.createElement('a');
       a.href = dataStr;
       a.download = `rutas_guardadas_boulder_app.json`;
@@ -1489,7 +1637,13 @@
           const imported = JSON.parse(evt.target.result);
           if (Array.isArray(imported)) {
             let addedCount = 0;
+            const notesEntry = imported.find(x => x && x.__zoneNotes);
+            if (notesEntry) {
+              Object.entries(notesEntry.__zoneNotes).forEach(([k, v]) => { if (!zoneNotes[k]) zoneNotes[k] = v; });
+              saveZoneNotes();
+            }
             imported.forEach(newB => {
+              if (!newB || newB.__zoneNotes) return;
               const exists = boulders.some(b => b.id === newB.id || (b.name === newB.name && b.sector === newB.sector && (b.zone || '') === (newB.zone || '')));
               if (!exists) {
                 boulders.unshift(newB);
